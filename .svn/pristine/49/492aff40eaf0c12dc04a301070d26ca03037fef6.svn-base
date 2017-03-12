@@ -1,0 +1,44 @@
+# -*- coding: utf-8 -*-
+
+# Define here the models for your scraped items
+#
+# See documentation in:
+# http://doc.scrapy.org/en/latest/topics/items.html
+
+import scrapy
+from scrapy import Item,Field
+
+class SfdatacrawlItem(scrapy.Item):
+    # define the fields for your item here like:
+    # name = scrapy.Field()
+    pass
+
+class TestItem(scrapy.Item):
+    name1 = Field()
+    pass
+class ProductItem(scrapy.Item):
+    crawl_product_id = Field()
+    crawl_product_name = Field()
+    nav_date = Field()
+    crawl_product_full_name = Field()
+    start_date = Field()
+    trustee_bank = Field()
+    status = Field()
+    product_type = Field()
+    company_name = Field()
+    min_purchase_amount = Field()
+    min_append_amount = Field()
+    structured = Field()
+    crawl_url = Field()
+    crawl_comapny_id = Field()
+    crawl_managers_id = Field()
+    crawl_managers_name = Field()
+    manager_list = Field()
+    locked_time = Field()
+    open_date = Field()
+    commission = Field()
+    ransom_fee = Field()
+    fixed_management_fee = Field()
+    subscription_fee = Field()
+    crawl_create_time = Field()
+    pass

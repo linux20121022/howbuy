@@ -1,0 +1,809 @@
+# -*- coding: utf-8 -*-
+
+# Define your item pipelines here
+#
+# Don't forget to add your pipeline to the ITEM_PIPELINES setting
+# See: http://doc.scrapy.org/en/latest/topics/item-pipeline.html
+import MySQLdb
+import datetime
+import time
+import calendar
+import numpy as np
+from sfDataCrawl import settings
+import numpy as np
+
+
+def get_date_by_interval(source_date, interval_type=1):
+    o_source_date =datetime.datetime.strptime(source_date, '%Y-%m-%d').date()
+    source_year = o_source_date.year
+    source_month = o_source_date.month
+    source_date = o_source_date.day
+    result_date = source_date
+    target_year = ''
+    target_month = ''
+    target_day = ''
+    if interval_type == 1 or interval_type == 2 or interval_type == 3:
+        #近几月
+        month_type = {1: 1, 2: 3, 3: 6}
+        interval_value = month_type[interval_type]
+        if source_month < interval_value :
+            target_year = source_year - 1
+        else:
+            target_year = source_year
+        target_month = divmod(source_month + 12 - interval_value, 12)[1]
+        if target_month == 0 :
+            target_month = 12
+            target_year -= 1
+        count_day = calendar.monthrange(target_year,target_month)[1]
+        if count_day < source_date:
+            target_day = count_day
+        else:
+            target_day = source_date
+        result_date = datetime.date(target_year, target_month, target_day)
+    elif interval_type == 4:
+        #今年以来
+        target_year = source_year
+        result_date = datetime.date(target_year, 1, 1)
+        pass
+    elif interval_type == 5 or interval_type == 6 or interval_type == 7 or interval_type == 8 or interval_type == 9:
+        #近几年
+        year_type = {5 : 1, 6 : 2, 7 : 3, 8 : 4, 9 : 5}
+        interval_value = year_type[interval_type]
+        target_year = source_year - interval_value
+        target_month = source_month
+        count_day = calendar.monthrange(target_year, target_month)[1]
+        if count_day < source_date:
+            target_day = count_day
+        else:
+            target_day = source_date
+        result_date = datetime.date(target_year, target_month, target_day)
+        pass
+    elif interval_type == 10 or interval_type == 11 or interval_type == 12 or interval_type == 13 or interval_type == 14:
+        year_type = {10 : 0, 11 : 1, 12 : 2, 13 : 3, 14 : 4}
+        interval_value = year_type[interval_type]
+        target_year = source_year - interval_value
+        target_month = 1
+        target_day = 1
+        result_date = datetime.date(target_year, target_month, target_day)
+    return result_date
+
+def get_day_interval(source_date,target_date):
+    o_source_date = datetime.datetime.strptime(source_date, '%Y-%m-%d').date()
+    o_target_date = datetime.datetime.strptime(target_date, '%Y-%m-%d').date()
+    return (o_target_date - o_source_date).days
+
+class SfDataCrawlPipeline(object):
+    host = '192.168.83.31'
+    user_name = 'root'
+    password = 'Jrcs@15F'
+    db_name = 'sf_crawl'
+    cursor = ''
+    conn = ''
+    def __init__(self):
+        try:
+            self.conn = MySQLdb.connect(self.host, self.user_name, self.password, self.db_name, charset='utf8',use_unicode=True)
+            self.cursor = self.conn.cursor()
+        except MySQLdb.Error,e:
+            print 'initial error'
+            print str(e)
+    def process_item(self, item, spider):
+        #test db in the localhost
+        # if 'name1' in item:
+        #     try:
+        #         self.cursor.execute('INSERT INTO test(name) VALUES(%s)', [item['name1']])
+        #         self.conn.commit()
+        #     except MySQLdb.Error, e:
+        #         print "ERROR"
+        return item
+
+class SfProductPipeline(object):
+    def process_item(self,item,spider):
+        # return item
+        if 'crawl_product_id' in item and 'crawl_product_name' in item:
+            spider.spider_log.info('items log, product item')
+            conn = spider.conn
+            cursor = spider.cursor
+            product_dict = spider.product_dict
+            howbuy_product_dict = spider.howbuy_product_dict
+            product_name = item['crawl_product_name']
+            howbuy_id = item['crawl_product_id']
+            if howbuy_id not in howbuy_product_dict:
+                if product_name not in product_dict:
+                    #新产品，从未采集过
+                    try:
+                        cursor.execute(
+                            'INSERT INTO sf_product(crawl_id,name,full_name,nav_date,company_id,manager_list,start_date,trustee_bank,product_type,\
+                            company_name,min_purchase_amount,min_append_amount,structured,crawl_url,crawl_comapny_id,crawl_managers_list,crawl_create_time,crawl_update_time)\
+                             VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            [item['crawl_product_id'], item['crawl_product_name'], item['crawl_product_full_name'], item['nav_date'], item['company_id']
+                            , item['manager_list'],item['start_date'],item['trustee_bank'],item['product_type'],item['company_name']
+                            ,item['min_purchase_amount'],item['min_append_amount'],item['structured'],item['crawl_url'],item['crawl_comapny_id'],item['manager_list'],item['now_time'],item['now_time']])
+                        new_product_id = cursor.lastrowid
+                        cursor.execute('INSERT INTO sf_product_data(id,crawl_id,subscription_fee,fixed_management_fee,ransom_fee,commission,open_date,locked_time) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)',
+                            [int(conn.insert_id()),item['crawl_product_id'],item['subscription_fee'],item['fixed_management_fee'], item['ransom_fee'],item['commission'], item['open_date'], item['locked_time']])
+                        conn.commit()
+                        spider.product_dict[product_name] = {'id':new_product_id,'name':product_name,'status':0,
+                                                             'howbuy_id':howbuy_id,'howbuy_update_time': item['now_time']}
+                        spider.howbuy_product_dict[howbuy_id] = {'id':new_product_id,'name':item['crawl_product_name'],
+                                                                 'status':0,'howbuy_id':howbuy_id,'howbuy_update_time': item['now_time']}
+                        #插入sf_dividend_split操作
+                        if item['dividend_date'] is not None:
+                            nav_value_sum = 0;
+                            length = len(item['dividend_date'])
+                            for i in range(0,length):
+                                nav_data_sql = 'SELECT product_id, nav,added_nav FROM sf_nav WHERE nav_date >= %s AND crawl_id= %s ORDER BY nav_date  LIMIT 1 ;'
+                                cursor.execute(nav_data_sql,[item['dividend_date'][length-i-1],howbuy_id])
+                                nav_data = cursor.fetchone()
+                                if nav_data is not None:
+                                    nav_value = nav_data[2] - nav_data[1] - nav_value_sum
+                                    nav_value_sum += nav_value
+                                    insert_sfdividendsplit_sql = ' INSERT INTO `sf_dividend_split`(product_id,`type`,`date`,`value`,create_time,update_time)VALUES(%s,%s,%s,%s,%s,%s)'
+                                    create_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                                    update_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                                    cursor.execute(insert_sfdividendsplit_sql, [new_product_id,1,item['dividend_date'][length - i - 1], nav_value,create_time,update_time])
+                                    conn.commit()
+                    except MySQLdb.Error, e:
+                        print str(e)
+                else:
+                    product_info = product_dict[product_name]
+                    product_id = product_info['id']
+                    try:
+                        #该产品已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_product set crawl_id = %s,nav_date = %s,manager_list = %s,start_date = %s,trustee_bank = %s,product_type = %s\
+                         ,min_purchase_amount = %s,structured = %s,crawl_url = %s,crawl_comapny_id = %s,crawl_managers_list = %s,crawl_update_time = %s where id = %s',
+                         [howbuy_id,item['nav_date'],item['manager_list'],item['start_date'],item['trustee_bank'],item['product_type'],
+                         item['min_purchase_amount'],item['structured'],item['crawl_url'],item['crawl_comapny_id'],item['manager_list'],item['now_time'],product_id])
+                        conn.commit()
+                        spider.product_dict[product_name] = {'id': product_id,'name': product_name,'status': 0,
+                                                             'howbuy_id': howbuy_id,'howbuy_update_time': item['now_time']}
+                        spider.howbuy_product_dict[howbuy_id] = {'id': product_id,'name': product_name,'status': 0,
+                                                                 'howbuy_id': howbuy_id,'howbuy_update_time': item['now_time']}
+
+                        # 插入sf_dividend_split操作
+                        if item['dividend_date'] is not None:
+                            spider.spider_log.info('product item ---step1')
+                            nav_value_sum = 0;
+                            length = len(item['dividend_date'])
+                            for i in range(0, length):
+                                query_date = item['dividend_date'][length - i - 1]
+                                is_sfdividend_split_exist_sql = 'SELECT * FROM `sf_dividend_split` WHERE`date` =%s and product_id=%s'
+                                cursor.execute(is_sfdividend_split_exist_sql,[query_date,product_id])
+                                queryResult = cursor.fetchone()
+                                if queryResult is None:
+                                    nav_data_sql = 'SELECT product_id, nav,added_nav FROM sf_nav WHERE nav_date >= %s AND crawl_id= %s ORDER BY nav_date  LIMIT 1 ;'
+                                    cursor.execute(nav_data_sql, [item['dividend_date'][length - i - 1], howbuy_id])
+                                    nav_data = cursor.fetchone()
+                                    if nav_data is not None:
+                                        nav_value = nav_data[2] - nav_data[1] - nav_value_sum
+                                        nav_value_sum += nav_value
+                                        insert_sfdividendsplit_sql = ' INSERT INTO `sf_dividend_split`(product_id,`type`,`date`,`value`,create_time,update_time)VALUES(%s,%s,%s,%s,%s,%s)'
+                                        create_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                                        update_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                                        cursor.execute(insert_sfdividendsplit_sql, [product_id, 1, item['dividend_date'][length - i - 1], nav_value,\
+                                                        create_time, update_time])
+                                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                pass
+            else:
+                if product_name not in product_dict:
+                    #采集过，但是产品名字修改
+                    #TODO 需讨论
+                    pass
+                else:
+                    #完全匹配
+                    product_info = product_dict[product_name]
+                    product_id = product_info['id']
+                    try:
+                        #该产品已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_product set crawl_id = %s,nav_date = %s,manager_list = %s,start_date = %s,trustee_bank = %s,product_type = %s\
+                        ,min_purchase_amount = %s,structured = %s,crawl_url = %s,crawl_comapny_id = %s,crawl_managers_list = %s,crawl_update_time = %s where id = %s',
+                        [howbuy_id,item['nav_date'],item['manager_list'],item['start_date'],item['trustee_bank'],item['product_type'],
+                        item['min_purchase_amount'],item['structured'],item['crawl_url'],item['crawl_comapny_id'],item['manager_list'],item['now_time'],product_id])
+                        conn.commit()
+
+                        # 插入sf_dividend_split操作
+                        if item['dividend_date'] is not None:
+                            nav_value_sum = 0;
+                            length = len(item['dividend_date'])
+                            for i in range(0, length):
+                                query_date = item['dividend_date'][length - i - 1]
+                                is_sfdividend_split_exist_sql = 'SELECT * FROM `sf_dividend_split` WHERE`date` =%s and product_id=%s'
+                                cursor.execute(is_sfdividend_split_exist_sql, [query_date, product_id])
+                                queryResult = cursor.fetchone()
+                                if queryResult is None:
+                                    nav_data_sql = 'SELECT product_id, nav,added_nav FROM sf_nav WHERE nav_date >= %s AND crawl_id= %s ORDER BY nav_date  LIMIT 1 ;'
+                                    cursor.execute(nav_data_sql, [item['dividend_date'][length - i - 1], howbuy_id])
+                                    nav_data = cursor.fetchone()
+                                    if nav_data is not None:
+                                        nav_value = nav_data[2] - nav_data[1] - nav_value_sum
+                                        nav_value_sum += nav_value
+                                        insert_sfdividendsplit_sql = ' INSERT INTO `sf_dividend_split`(product_id,`type`,`date`,`value`,create_time,update_time)VALUES(%s,%s,%s,%s,%s,%s)'
+                                        create_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                                        update_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                                        cursor.execute(insert_sfdividendsplit_sql,[product_id, 1, item['dividend_date'][length - i - 1], nav_value,create_time, update_time])
+                                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                    pass
+                pass
+                pass
+        return item
+
+class SfCompanyPipeline(object):
+    def process_item(self,item,spider):
+        if 'core_manager_name' in item and 'registered_capital' in item:
+            spider.spider_log.info('items log, company item step0')
+            conn = spider.conn
+            cursor = spider.cursor
+            company_dict = spider.company_dict
+            howbuy_company_dict = spider.howbuy_company_dict
+            company_name = item['name']
+            howbuy_id = item['crawl_id']
+            spider.spider_log.info('items log, company item step5')
+            if howbuy_id not in howbuy_company_dict:
+                if company_name not in company_dict:
+                    spider.spider_log.info('items log, step1')
+                    #新公司，从未采集过
+                    try:
+                        cursor.execute(
+                            'INSERT INTO sf_company(crawl_url,crawl_create_time,crawl_update_time,crawl_id,full_name,name,core_manager_name,rep_product_name,\
+                            icp,establishment_date,registered_capital,region,update_time) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            [item['crawl_url'],item['crawl_create_time'],item['crawl_update_time'],item['crawl_id'],item['full_name'],
+                            item['name'], item['core_manager_name'], item['rep_product_name'],item['icp'],item['establishment_date'],
+                            item['registered_capital'],item['region'],item['update_time']])
+                        lastid = int(cursor.lastrowid)
+                        cursor.execute('INSERT INTO sf_company_data(id) VALUES(%s)',[lastid])
+
+                        #update company dict
+                        update_company_info = {
+                            'id': lastid,
+                            'name': item['name'],
+                            'status': 0,
+                            'howbuy_id': howbuy_id,
+                            'howbuy_update_time': item['crawl_update_time']
+                        }
+                        conn.commit()
+                        spider.company_dict[company_name] = update_company_info
+                        spider.howbuy_company_dict[howbuy_id] = update_company_info
+                        #update sf_product companye_id
+                        sfproduct_ids_sql = 'SELECT id FROM `sf_product` where crawl_comapny_id=%s'
+                        cursor.execute (sfproduct_ids_sql,[howbuy_id])
+                        sfproductIds = cursor.fetchall()
+                        for sfproduct_id in sfproductIds:
+                            update_product_company_id_sql = 'UPDATE sf_product SET company_id =%s,update_time=%s WHERE id = %s'
+                            cursor.execute(update_product_company_id_sql,[lastid,item['update_time'],sfproduct_id])
+                            conn.commit()
+
+                        # update sf_manager companye_id
+                        sfmanager_ids_sql = 'SELECT id FROM `sf_manager` where crawl_comapny_id=%s'
+                        cursor.execute(sfmanager_ids_sql, [howbuy_id])
+                        sfmanagerIds = cursor.fetchall()
+                        for sfmanager_id in sfmanagerIds:
+                            update_manager_company_id_sql = 'UPDATE sf_manager SET company_id =%s,update_time=%s WHERE id = %s'
+                            cursor.execute(update_manager_company_id_sql, [lastid, item['update_time'], sfmanager_id])
+                            conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                else:
+                    company_info = company_dict[company_name]
+                    company_id = company_info['id']
+                    try:
+                        #该公司已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_company set crawl_id=%s,full_name=%s,crawl_update_time =%s, crawl_url=%s, core_manager_name=%s,\
+                        rep_product_name=%s, icp=%s, establishment_date=%s, registered_capital=%s, region=%s ,update_time=%s where id = %s',[howbuy_id ,
+                        item['full_name'],item['crawl_update_time'],item['crawl_url'],item['core_manager_name'],item['rep_product_name'],item['icp'],
+                        item['establishment_date'],item['registered_capital'],item['region'],item['update_time'],company_id])
+                        conn.commit()
+                        # update company dict
+                        update_company_info = {
+                            'id': company_id,
+                            'name': item['name'],
+                            'status': 0,
+                            'howbuy_id': howbuy_id,
+                            'howbuy_update_time': item['crawl_update_time']
+                        }
+                        conn.commit()
+                        spider.company_dict[company_name] = update_company_info
+                        spider.howbuy_company_dict[howbuy_id] = update_company_info
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                pass
+            else:
+                if company_name not in company_dict:
+                    spider.spider_log.info('items log, step3')
+                    #采集过，但是产品名字修改
+                    #TODO 需讨论
+                    pass
+                else:
+                    spider.spider_log.info('items log, step4')
+                    #完全匹配
+                    company_info = company_dict[company_name]
+                    company_id = company_info['id']
+                    try:
+                        #该产品已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_company set crawl_id = %s,update_time=%s where id = %s',[howbuy_id ,item['update_time'], company_id])
+                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                    pass
+        return item
+
+
+class NavPipeline(object):
+    def cmp_func(self,a,b):
+        max_date_1 = a['max'][0]
+        max_date_2 = b['max'][0]
+        if max_date_1 > max_date_2:
+            return 1
+        else:
+            return -1
+        pass
+    def process_item(self, item, spider):
+        cursor = spider.cursor
+        conn = spider.conn
+        # self._calculate_statistics('80017568', cursor, spider)
+        if 'nav_item_date' in item:
+            #spider.spider_log.info('nav item is inserting')
+            cursor = spider.cursor
+            conn = spider.conn
+            max_month = 0
+            sql = 'insert into sf_nav(product_id,crawl_id,nav_date,added_nav,nav,growth_rate,create_time,update_time,crawl_time,crawl_url) values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)'
+            try:
+                cursor.executemany(sql, item['nav_item_date'])
+                conn.commit()
+                # cursor.execute('SELECT `year_month`,added_nav,hs300 FROM sf_return_drawdown where type = %s AND product_id = %s order by `year_month` DESC limit 2',[2,item['product_id'][0]])
+                # #self.cursor.execute('SELECT MAX(year_month) FROM sf_return_drawdown')
+                # navs = cursor.fetchall()
+                # print navs
+                # if len(navs) == 0:
+                #     cursor.execute('SELECT nav_date,nav,added_nav FROM sf_nav where product_id = %s Order By `nav_date`',[item['product_id'][0]])
+                #     product_navs = cursor.fetchall()
+                # else:
+                #     max_month = navs[0][0]
+                #     end_time = time.strftime('%Y-%m-%d', time.localtime(time.time()))
+                #     cursor.execute('SELECT nav_date,nav,added_nav FROM sf_nav where product_id = %s AND `nav_date` >= %s and `nav_date` <= %s Order By `nav_date`',[item['product_id'][0],max_month,end_time])
+                #     product_navs = cursor.fetchall()
+                # return_navs = {}
+                # list_navs = []
+                # list_data = []
+                # results = {}
+                # result = {}
+                # hs_data = []
+                # hs_value = {}
+                # hs_list = {}
+                # hs_result = {}
+                # current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+                # if not all(product_navs[0]):
+                #     print "此产品暂时无数据"
+                # else:
+                #     for product_nav in product_navs:
+                #         data = product_nav[0]
+                #         month = str(data)[0:7]
+                #         if month not in return_navs:
+                #             return_navs[month] = {'max':product_nav,'min':product_nav}
+                #         else:
+                #             if return_navs[month]['max'][0] < data:
+                #                 return_navs[month]['max'] = product_nav
+                #             if return_navs[month]['min'][0] > data:
+                #                 return_navs[month]['min'] = product_nav
+                #     for k in return_navs:
+                #         list_navs.append(return_navs[k])
+                #     for j in sorted(list_navs,cmp=self.cmp_func):
+                #         list_data.append(j)
+                #     for i in range(0, len(list_data)):
+                #         sMax = str(list_data[i]['max'][0])
+                #         sMonth = str(list_data[i]['max'][0])[0:7]
+                #         if i+1 == len(list_data):
+                #             results[sMonth] = list_data[i]['max']
+                #         else:
+                #             sNextMin = str(list_data[i+1]['min'][0])
+                #             sFirst = str(list_data[i+1]['min'][0])[0:7]+'-01'
+                #             timefArray = time.strptime(sFirst,"%Y-%m-%d")
+                #             timeaArray = time.strptime(sMax,"%Y-%m-%d")
+                #             timeiArray = time.strptime(sNextMin,"%Y-%m-%d")
+                #             timeFtamp = int(time.mktime(timefArray))
+                #             timeAtemp = int(time.mktime(timeaArray))
+                #             timeItemp = int(time.mktime(timeiArray))
+                #             if abs(timeAtemp - timeFtamp) > abs(timeItemp - timeFtamp):
+                #                 results[sMonth] = list_data[i+1]['min']
+                #             else:
+                #                 results[sMonth] = list_data[i]['max']
+                #     for result_date in results:
+                #         hs_data.append(results[result_date][0])
+                #     for result_date in results:
+                #         hs_value[results[result_date][0]] = result_date
+                #     keys = results.keys()
+                #     keys.sort()
+                #     for key in range(0,len(keys)):
+                #         k = keys[key]
+                #         result[k] = {}
+                #         if key == 0:
+                #             result[k]['value'] = 0
+                #         else:
+                #             last_key = keys[key-1]
+                #             result[k]['value'] = round((results[k][2] - results[last_key][2])/results[k][2],4)
+                #             if result[k]['value'] > 0:
+                #                 result[k]['value'] = 0
+                #     cursor.execute('SELECT hs_index,index_date FROM sf_hs_index where index_date in %s order By index_date',[hs_data])
+                #     hs_navs = cursor.fetchall()
+                #     for hs_nav in hs_navs:
+                #         hs_key = hs_nav[1]
+                #         hs_list[hs_value[hs_key]] = hs_nav[0]
+                #     keys = hs_list.keys()
+                #     keys.sort()
+                #     for key in range(0,len(keys)):
+                #         k = keys[key]
+                #         hs_result[k] = {}
+                #         if key == 0:
+                #             hs_result[k]['value'] = 0
+                #         else:
+                #             last_key = keys[key-1]
+                #             hs_result[k]['value'] = round((hs_list[k] - hs_list[last_key])/hs_list[k],4)
+                #             if hs_result[k]['value'] > 0:
+                #                 hs_result[k]['value'] = 0
+                #     for key in results:
+                #         if max_month != 0 and key == max_month:
+                #             max_month_value = round((results[key][2] - navs[1][1])/results[key][2],4)
+                #             if max_month_value > 0:
+                #                 max_month_value = 0
+                #             max_hs300 = round((hs_list[k] - navs[1][2])/hs_list[k],4)
+                #             if max_hs300 >0:
+                #                 max_hs300 = 0
+                #             cursor.execute('UPDATE sf_return_drawdown SET nav = %s,added_nav = %s,value=%s,hs300=%s,update_time=%s where product_id = %s and `year_month`=%s',
+                #                 [results[key][1],results[key][2],max_month_value,max_hs300,current_time,item['product_id'][0],max_month])
+                #         else:
+                #             cursor.execute('INSERT INTO sf_return_drawdown(product_id,type,`year_month`,nav,added_nav,value,hs300,create_time,update_time) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                #                 [item['product_id'][0],2,key,results[key][1],results[key][2],result[key]['value'],hs_result[key]['value'],current_time,current_time])
+                #         conn.commit()
+                print "INSERT was successful"
+                self._calculate_statistics(item['product_id'][0],cursor,spider,conn)
+            except MySQLdb.Error, e:
+                print cursor._last_executed
+                #spider.spider_log.error('插入失败的produt_id: '+str(item))
+            pass
+            # self._calculate_statistics(80018122,cursor,spider)
+            pass
+        return item
+    def _calculate_statistics(self,product_id,cursor,spider,conn):
+        #无风险利率
+        unrisk_rate = 0.026
+        nav_select_sql = 'SELECT product_id,nav_date,nav,added_nav,growth_rate,create_time,update_time FROM sf_nav WHERE \
+                         product_id = %s ORDER BY nav_date Desc'
+        cursor.execute(nav_select_sql,[product_id])
+        sf_navs = cursor.fetchall()
+        need_insert = False
+        statistic_select_sql = 'SELECT count(1) FROM sf_statistic WHERE product_id = %s'
+        cursor.execute(statistic_select_sql,[product_id])
+        statistic_info = cursor.fetchall()
+        for statistic_line in statistic_info:
+            if statistic_line[0] == 0 :
+                need_insert = True
+        hs300_dict = spider.hs300_dict
+        sf_nav_dict = {}
+        sf_latest_date = ''
+        sf_first_date = ''
+        if len(sf_navs) > 0:
+            current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+            result = {}
+            net_result = {}
+            for i in range(1,16):
+                result[i] = {
+                    'product_id': product_id,
+                    'time_type': i,
+                    'type_average_net': None,
+                    'four_bit_rank': None,
+                    'hs300': None,
+                    'annualized_wave': None,
+                    'annualized_net': None,
+                    'retrace': None,
+                    'sharp': None,
+                    'calmar': None,
+                    'sortino': None,
+                    'month_win': None,
+                    'type_average_rank': None,
+                    'update_time': current_time
+                }
+                net_result[i] = None
+            date_index = 0
+            sf_latest_date = str(sf_navs[0][1])
+            target_date = {}
+            o_latest_date = datetime.datetime.strptime(sf_latest_date, '%Y-%m-%d').date()
+            for i in range(1,15):
+                target_day = get_date_by_interval(sf_latest_date,i)
+                target_date[i] = {
+                    'target_date' : target_day,
+                    'target_nav_date' : sf_latest_date,
+                    'offset' : abs((o_latest_date - target_day).days),
+                    'dates' : [], #绝对区间内的数据
+                    'nav_datas': []  # 绝对区间内的净值
+                }
+            for nav_info in sf_navs:
+                nav_date = str(nav_info[1])
+                nav = nav_info[2]
+                added_nav = nav_info[3]
+                sf_nav_dict[nav_date] = {'nav_date':nav_date,'nav':nav,'added_nav':added_nav}
+                o_nav_date = datetime.datetime.strptime(nav_date, '%Y-%m-%d').date()
+                for i in range(1,15):
+                    target_day = target_date[i]['target_date']
+                    temp_offset = (o_nav_date - target_day).days
+                    offset = abs(temp_offset)
+                    target_date[i]['yield_rate'] = nav
+                    if offset < target_date[i]['offset']:
+                        target_date[i]['target_nav_date'] = nav_date
+                        target_date[i]['offset'] = offset
+                    if i < 10 or i == 15:
+                        if temp_offset >= 0:
+                            target_date[i]['dates'].append(nav_date)
+                            target_date[i]['nav_datas'].append(nav)
+                    else:
+                        o_return_last_day = datetime.date(target_day.year,12,31)
+                        right_offset = (o_return_last_day - o_nav_date).days
+                        if temp_offset >=0 and right_offset >=0:
+                            target_date[i]['dates'].append(nav_date)
+                            target_date[i]['nav_datas'].append(nav)
+            sf_first_date = min(sf_nav_dict.keys())
+            o_sf_first_date = datetime.datetime.strptime(sf_first_date, '%Y-%m-%d').date()
+            max_offset = (o_latest_date - o_sf_first_date).days
+            target_date[15] = {
+                'target_date': o_sf_first_date,
+                'target_nav_date': sf_first_date,
+                'offset': max_offset,
+                'dates': sorted(sf_nav_dict.keys(),reverse=True)  # 绝对区间内的数据
+            }
+            for i in range(1,16):
+                o_target_info = target_date[i]
+                if o_target_info['offset'] <= max_offset:
+                    #标准差
+                    standard_deviation = 0
+                    #和值
+                    sum_net = 0
+                    #时间差
+                    delta_day = 0
+                    #净值list
+                    nets = list()
+                    target_nav_date = o_target_info['target_nav_date']
+                    #年化波动率
+                    #平均值
+                    # length = len(target_date[i]['dates'])
+                    # target_date[i]['avg_nav'] = sum(target_date[i]['nav_datas'])/length
+                    # target_date[i]['avg_nav'] = np.mean(target_date[i]['nav_datas'])
+                    #标准差
+                    if(len(target_date[i]['nav_datas']) > 1):
+                        std_num = np.std(target_date[i]['nav_datas'])
+                        start = datetime.datetime.strptime(target_date[i]['dates'][0],'%Y-%m-%d')
+                        end = datetime.datetime.strptime(target_date[i]['dates'][len(target_date[i]['dates'])-1],'%Y-%m-%d')
+                        dayNum = (start - end).days
+                        year_rate = std_num/dayNum*365
+                        target_date[i]['year_rate'] = '%.4f' % year_rate
+                        print target_date[i]['year_rate']
+                    else:
+                        target_date[i]['year_rate'] = 0
+                    net_value = 0
+                    begin_day_info = sf_nav_dict[target_nav_date]
+                    date_info = o_target_info['dates']
+                    date_length = len(date_info)
+                    last_day = sf_latest_date
+                    begin_day = target_nav_date
+                    if date_length > 0:
+                        if i > 9 and i < 15:
+                            #逐年
+                            last_day = date_info[0]
+                            begin_day = date_info[date_length-1]
+                            begin_day_info = sf_nav_dict[begin_day]
+                            end_day_info = sf_nav_dict[last_day]
+                        else:
+                            end_day_info = sf_nav_dict[sf_latest_date]
+                            if target_nav_date != date_info[date_length-1]:
+                                spider.spider_log.info('不相等')
+                                spider.spider_log.info(date_info[date_length - 1])
+                                spider.spider_log.info(target_nav_date)
+                                #摇摆过，不是绝对期间中的数据
+                                nets.append(sf_nav_dict[target_nav_date]['nav'])
+                            pass
+                        for j in range(0, len(date_info)):
+                            nets.append(sf_nav_dict[date_info[j]]['nav'])
+                        delta_day = get_day_interval(begin_day, last_day)
+                        standard_deviation = float(np.std(nets))
+                        net_value = (end_day_info['nav'] - begin_day_info['nav']) / begin_day_info['nav']
+                        net_result[i] = net_value
+                        hs_net_value = round(float(hs300_dict[last_day]['hs_index']/hs300_dict[begin_day]['hs_index'])
+                                             - 1.0, 4)
+                        result[i]['hs300'] = round(hs_net_value,4)
+                        if standard_deviation is not None and standard_deviation != 0:
+                            sharp_value = round((float(net_value) - float(unrisk_rate))/standard_deviation,4)
+                        result[i]['sharp'] = round(sharp_value,4)
+                    pass
+            from_start_date = sf_first_date
+            #下方变量均为摇摆后的日期，因此在计算中对于不需要摇摆的日期，请使用get_date_by_interval函数获取真实日期
+            if 1 in target_date and target_date[1] is not None:
+                last_month_date = target_date[1]['target_nav_date']
+                last_month_nav = target_date[1]['yield_rate']
+            else:
+                last_month_date = None
+            if 2 in target_date and target_date[2] is not None:
+                last_3month_date = target_date[2]['target_nav_date']
+                last_3month_nav = target_date[2]['yield_rate']
+            else:
+                last_3month_date = None
+            if 3 in target_date and target_date[3] is not None:
+                last_6_month_date = target_date[3]['target_nav_date']
+                last_6month_nav = target_date[3]['yield_rate']
+            else:
+                last_6_month_date = None
+            if 4 in target_date and target_date[4] is not None:
+                this_year_date = target_date[4]['target_nav_date']
+                this_year_nav = target_date[4]['yield_rate']
+            else:
+                this_year_date = None
+            if 5 in target_date and target_date[5] is not None:
+                last_year_date = target_date[5]['target_nav_date']
+                last_year_nav = target_date[5]['yield_rate']
+            else:
+                last_year_date = None
+            if 6 in target_date and target_date[6] is not None:
+                last_2year_date = target_date[6]['target_nav_date']
+                last_2year_nav = target_date[6]['yield_rate']
+            else:
+                last_2year_date = None
+            if 7 in target_date and target_date[7] is not None:
+                last_3_year_date = target_date[7]['target_nav_date']
+                last_3year_nav = target_date[7]['yield_rate']
+            else:
+                last_3_year_date = None
+            if 8 in target_date and target_date[8] is not None:
+                last_4_year_date = target_date[8]['target_nav_date']
+                last_4_year_nav = target_date[8]['yield_rate']
+            else:
+                last_4_year_date = None
+            if 9 in target_date and target_date[9] is not None:
+                last_5_year_date = target_date[9]['target_nav_date']
+                last_5_year_nav = target_date[9]['yield_rate']
+            else:
+                last_5_year_date = None
+            if 10 in target_date and target_date[10] is not None:
+                return_year_date = target_date[10]['target_nav_date']
+                return_year_nav = target_date[10]['yield_rate']
+            else:
+                return_year_date = None
+            if 11 in target_date and target_date[11] is not None:
+                return_2year_date = target_date[11]['target_nav_date']
+                return_2year_nav = target_date[11]['yield_rate']
+            else:
+                return_2year_date = None
+            if 12 in target_date and target_date[12] is not None:
+                return_3year_date = target_date[12]['target_nav_date']
+                return_3year_nav = target_date[12]['yield_rate']
+            else:
+                return_3year_date = None
+            if 13 in target_date and target_date[13] is not None:
+                return_4year_date = target_date[13]['target_nav_date']
+                return_4year_nav = target_date[13]['yield_rate']
+            else:
+                return_4year_date = None
+            if 14 in target_date and target_date[14] is not None:
+                return_5_year_date = target_date[14]['target_nav_date']
+                return_5year_nav = target_date[14]['yield_rate']
+            else:
+                return_5_year_date = None
+            max_retracement_list = []
+            #spider.spider_log.error("数据:"+str(target_date))
+            for time_type in target_date:
+                date_info = target_date[time_type]
+                if date_info is None:
+                    break
+                else:
+                    for data in date_info['dates']:
+                        max_retracement_list.append(sf_nav_dict[str(data)]['nav'])
+                    #spider.spider_log.error("数据:"+str(max_retracement_list))
+                    result[time_type]['retrace'] = max(max_retracement_list) - min(max_retracement_list)
+                    result[time_type]['time_type'] = time_type
+                    #spider.spider_log.error("数据键值:"+str(result))
+            spider.spider_log.error("数据2:"+str(result))
+        pass
+
+    def _calculate_fourbit_rank_statistics(self,cursor,conn,spider):
+        for time_type in range(1,15):
+            sfproduct_net_statistics_sql = 'SELECT productId,annualizedNet, maxNet,minNet,(maxNet-minNet) AS minusNet \
+                FROM(SELECT statisticT.annualized_net AS annualizedNet, productT.id AS productId,max(statisticT.annualized_net) AS' \
+                ' maxNet,min(statisticT.annualized_net) AS minNet,productT.id FROM `sf_product` productT LEFT JOIN sf_statistic statisticT ON ' \
+                'statisticT.product_id = productT.id WHERE statisticT.time_type =%s AND productT.status =0 GROUP BY statisticT.annualized_net)Temp '
+            cursor.execute(sfproduct_net_statistics_sql,[time_type])
+            sfproduct_net_info = cursor.fetchall()
+            #四分卫各节点
+            if sfproduct_net_info is not None:
+                # minNet~ onefourth; onefourth~twofourths ;twofourths~threefourths ; threefourths~maxNet
+                maxNet = sfproduct_net_info[0][2]
+                minNet = sfproduct_net_info[0][3]
+                minusNet = sfproduct_net_info[0][4]
+                onefourth = minNet + minusNet/4      #四分之一节点
+                twofourths = minNet +  minusNet/2
+                threefourths = minNet + 3*minusNet/4
+                for info in sfproduct_net_info:
+                    productId = info[0]
+                    annualizedNet = info[1]
+                    if annualizedNet is not None:
+                        if annualizedNet >= minNet and annualizedNet <= onefourth:
+                            four_bit_rank = 1.0000;
+                        elif annualizedNet>onefourth and annualizedNet<=twofourths:
+                            four_bit_rank = 2.0000
+                        elif annualizedNet>twofourths and annualizedNet<=threefourths:
+                            four_bit_rank = 3.0000
+                        elif annualizedNet>threefourths and annualizedNet<=maxNet:
+                            four_bit_rank = 4.0000
+                        else:
+                            pass
+                        update_fourbitrank_statistic_sql = 'UPDATE `sf_statistic` SET four_bit_rank =%s WHERE product_id = %s AND time_type =%s'
+                        cursor.execute(update_fourbitrank_statistic_sql,[four_bit_rank,productId,time_type])
+                        conn.commit()
+
+
+class SfManagerPipeline(object):
+    def process_item(self,item,spider):        
+        if 'typical_product_id' in item:
+            conn = spider.conn
+            cursor = spider.cursor
+            manager_dict = spider.manager_dict
+            howbuy_manager_dict = spider.howbuy_manager_dict
+            manager_name = item['manager_name']
+            company_name = item['company_name']
+            manager_company = item['manager_name']+'-'+item['company_name']
+            howbuy_id = item['crawl_id']
+            if manager_company not in manager_dict:
+                #新经理，从未采集过
+                try:
+                    cursor.execute(
+                        'INSERT INTO sf_manager(name,company_name,profile,background,invest_year,manage_product_num,\
+                        crawl_id,crawl_company_id,crawl_product_id,\
+                        crawl_create_time, create_time, update_time) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        [item['manager_name'],item['company_name'],item['profile'],item['background'],
+                         item['invest_year'], item['manage_product_num'], item['crawl_id'], item['company_id'],
+                         item['typical_product_id'],item['now_time'], item['create_time'], item['update_time']])
+                    conn.commit()
+                except MySQLdb.Error, e:
+                    print '**************', str(e)
+            else:
+                manager_info = manager_dict[manager_company]
+                manager_id = manager_info['id']
+                company_name = manager_info['company_name']
+                try:
+                    #该经理已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                    cursor.execute('UPDATE sf_manager set profile=%s, background =%s, invest_year=%s, manage_product_num=%s,\
+                    crawl_id=%s, crawl_company_id=%s, crawl_product_id=%s, crawl_update_time=%s, update_time = %s \
+                    where id = %s and company_name = %s',[item['profile'],item['background'],item['invest_year'],
+                                                          item['manage_product_num'], item['crawl_id'], item['company_id'],
+                                                          item['typical_product_id'],item['now_time'],item['update_time'],
+                                                          manager_id,company_name])
+                    conn.commit()
+                except MySQLdb.Error, e:
+                    print '**************', str(e)
+        return item
+class MonthPipeline(object):
+    def process_item(self, item, spider):
+        if 'month_return' in item:
+            conn = spider.conn
+            cursor = spider.cursor
+            sql = 'insert into sf_return_drawdown(`product_id`,`type`,`year_month`,`nav`,`added_nav`,`value`,`hs300`,`create_time`,`update_time`) values(%s,%s,%s,%s,%s,%s,%s,%s,%s)'
+            try:
+                cursor.executemany(sql, item['month_return'])
+                conn.commit()
+            except MySQLdb.Error, e:
+                spider.spider_log.info('插入失败的produt_id: ' + str(item['month_return']))
+            pass
+        return item
+#沪深300
+class HsPipeline(object):
+    def process_item(self, item, spider):
+        if 'hs_return' in item:
+            conn = spider.conn
+            cursor = spider.cursor
+            sql = 'insert into sf_hs_index(`index_type`,`index_date`,`hs_index`,`growth_rate`,`total_growth_rate`,`create_time`,`update_time`) values(%s,%s,%s,%s,%s,%s,%s)'
+            try:
+                cursor.executemany(sql, item['hs_return'])
+                conn.commit()
+                print "INSERT was successful"
+            except MySQLdb.Error, e:
+                spider.spider_log.info('插入失败的produt_id: ' + str(item['hs_return']))
+            pass
+            spider.get_hs_dict()
+        return item

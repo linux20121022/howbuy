@@ -1,0 +1,191 @@
+# -*- coding: utf-8 -*-
+import logging
+from scrapy import signals
+from scrapy.exceptions import NotConfigured
+import json
+import MySQLdb
+from sfDataCrawl import settings
+import math
+
+logger = logging.getLogger(__name__)
+
+class TestExtension(object):
+    product_db_conn = ''
+    product_db_cursor = ''
+    def __init__(self, ):
+        self.product_db_conn = ''
+        self.product_db_cursor = ''
+    @classmethod
+    def from_crawler(cls, crawler):
+        # instantiate the extension object
+        ext = cls()
+        # connect the extension object to signals
+        crawler.signals.connect(ext.spider_opened, signal=signals.spider_opened)
+        crawler.signals.connect(ext.spider_closed, signal=signals.spider_closed)
+        crawler.signals.connect(ext.item_scraped, signal=signals.item_scraped)
+
+        # return the extension object
+        return ext
+
+    def spider_opened(self, spider):
+        if spider.name == 'test':
+            crawl_db_conn = spider.conn
+            crawl_db_cursor = spider.cursor
+            self.product_db_conn = MySQLdb.connect(settings.PRODUCT_MYSQL_HOST, settings.PRODUCT_MYSQL_USER,
+                                                   settings.PRODUCT_MYSQL_PWD,settings.PRODUCT_MYSQL_DB,
+                                                   charset='utf8',use_unicode=True)
+            self.product_db_cursor = self.product_db_conn.cursor()
+            # sync the data from product system to sf_crawl database
+            if not settings.SKIP_IMPORTING:
+                try:
+                    self._import_company_data(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                    self._import_manager_data(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                    self._import_product_data(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                    self._import_manager_product_data(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                    self._import_hs_index(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                    self._import_product_nav(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                    self._import_return_darwdown(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                    self._import_statistics(self.product_db_conn, self.product_db_cursor, crawl_db_conn, crawl_db_cursor)
+                except MySQLdb.Error,e:
+                    spider.spider_log.info('import data Error' + str(e))
+                    raise
+                pass
+            pass
+        logger.info("opened spider %s", spider.name)
+
+    def spider_closed(self, spider):
+        if spider.name == 'test':
+            #sync the data from sf_crawl to the product system
+            if not settings.SKIP_EXPORTING:
+                pass
+            #free the conn and cursor
+            self.product_db_conn = ''
+            self.product_db_cursor = ''
+            pass
+        logger.info("closed spider %s", spider.name)
+
+    def item_scraped(self, item, spider):
+        pass
+
+    def _import_product_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        #获取crawl数据中最大的产品Id，将线上环境中大于该Id的insert进来，剩余更新进来
+        pass
+    def _import_manager_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        # 获取crawl数据中最大的经理Id，将线上环境中大于该Id的insert进来，剩余更新进来
+        pass
+    def _import_company_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        #获取crawl数据中最大的公司Id，将线上环境中大于该Id的insert进来，剩余更新进来
+        #暂时使用company和company_data分开处理两张表，为了代码书写方便。如果后期性能受到影响，合并读取
+        max_crawl_company_id = ''
+        max_crawl_update_time = ''
+        max_product_company_id = ''
+        max_product_update_time = ''
+        insert_per_round = 1000
+        crawl_cursor.execute('SELECT MAX(id) as maxId, MAX(update_time) as maxUpdateTime  FROM sf_company')
+        maxInfo = crawl_cursor.fetchall()
+        for maxLine in maxInfo:
+            max_crawl_company_id = maxLine[0]
+            max_crawl_update_time = maxLine[1]
+        product_cursor.execute('SELECT MAX(id) as maxId, MAX(update_time) as maxUpdateTime  FROM sf_company')
+        maxInfo = product_cursor.fetchall()
+        for maxLine in maxInfo:
+            max_product_company_id = maxLine[0]
+            max_product_update_time = maxLine[1]
+        if max_product_company_id > max_crawl_company_id :
+            product_cursor.execute('SELECT MAX(update_time) as maxUpdateTime from sf_company')
+            maxProductInfo = product_cursor.fetchall()
+            for maxLine in maxProductInfo:
+                max_product_update_time = maxLine[0]
+            product_cursor.execute('SELECT count(1)  FROM sf_company WHERE id > %s',[max_crawl_company_id])
+            inserted_number_info = product_cursor.fetchall()
+            for temp_info in inserted_number_info:
+                inserted_line_number = temp_info[0]
+            temp_page_number = (inserted_line_number)/insert_per_round
+            if divmod(inserted_line_number, insert_per_round) > 0 :
+                page_number = int(math.floor(temp_page_number) + 1)
+            else:
+                page_number = int(temp_page_number)
+            for i in range(0,page_number):
+                product_cursor.execute('SELECT id, name, full_name, nick_initial, core_manager_id, \
+                                     core_manager_name, rep_product, website_addr, icp, \
+                                     establishment_date, registered_capital, country, \
+                                     province, city, asset_mgmt_scale, logo, list_order, \
+                                     status, product_count, create_time, update_time from sf_company WHERE id > %s  ORDER BY \
+                                     id DESC LIMIT %s', [max_crawl_company_id, (i+1)*1000]
+                                       )
+                companies = product_cursor.fetchall()
+                inserted_company = list()
+                for company in companies:
+                    inserted_company.append(company)
+                crawl_cursor.executemany('INSERT INTO sf_company (id, name, full_name, nick_initial, core_manager_id, \
+                                         core_manager_name,rep_product, website_addr, icp, establishment_date, registered_capital, country, \
+                                         province, city, asset_mgmt_scale, logo, list_order, status, product_count,  \
+                                         create_time, update_time) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s,\
+                                         %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',inserted_company)
+                crawl_conn.commit()
+        if max_product_update_time > max_crawl_update_time:
+            to_update_number = 0
+            product_cursor.execute('SELECT COUNT(1) as toUpdateNum FROM sf_company WHERE update_time > %d',[max_crawl_update_time])
+            to_update_info = product_cursor.fetchall()
+            for update_line in to_update_info:
+                to_update_number = update_line[0]
+            if(divmod(to_update_number,insert_per_round) > 0):
+                to_update_total_page = int(math.floor(to_update_number/insert_per_round) + 1)
+            else:
+                to_update_total_page = int(math.floor(to_update_number/insert_per_round))
+            for update_index in range(0,to_update_total_page):
+                update_companies = product_cursor.execute('SELECT id, name, full_name, nick_initial, core_manager_id, \
+                                     core_manager_name, rep_product, website_addr, icp, \
+                                     establishment_date, registered_capital, country, \
+                                     province, city, asset_mgmt_scale, logo, list_order, \
+                                     status, product_count, create_time, update_time from sf_company WHERE id > %s  ORDER BY \
+                                     id DESC LIMIT %s', [max_crawl_company_id, (i+1)*1000]
+                                       )
+                updated_companies = list()
+                for update_company in update_companies:
+                    updated_companies.append(update_company)
+                for company in companies:
+                    #for now update the info one by one
+                    company_id = company[0]
+                    company = company + (company_id,)
+                    crawl_cursor.execute('UPDATE sf_company SET name = %s, full_name = %s, nick_initial = %s,\
+                                         core_manager_id = %s, rep_product = %s, website_addr = %s, icp = %s,\
+                                         establishment_date = %s, registered_capital = %s, country = %s, \
+                                         province = %s, city = %s, asset_mgmt_scale = %s, logo = %s, list_order = %s, \
+                                         status = %s, product_count = %s, create_time = %s, update_time = %s WHERE id = %s',
+                                         [company])
+                crawl_conn.commit()
+            pass
+    def _import_manager_product_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _import_product_nav(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _import_hs_index(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _import_dividend_split(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _import_return_darwdown(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _import_statistics(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+
+    def _export_product_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        #获取crawl数据中最大的产品Id，将线上环境中大于该Id的insert进来，剩余更新进来
+        pass
+    def _export_manager_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        # 获取crawl数据中最大的经理Id，将线上环境中大于该Id的insert进来，剩余更新进来
+        pass
+    def _export_company_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _export_manager_product_data(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _export_product_nav(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _export_hs_index(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _export_dividend_split(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _export_return_darwdown(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass
+    def _export_statistics(self, product_conn, product_cursor, crawl_conn, crawl_cursor):
+        pass

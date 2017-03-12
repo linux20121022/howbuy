@@ -1,0 +1,233 @@
+# -*- coding: utf-8 -*-
+
+# Define your item pipelines here
+#
+# Don't forget to add your pipeline to the ITEM_PIPELINES setting
+# See: http://doc.scrapy.org/en/latest/topics/item-pipeline.html
+import MySQLdb
+from sfDataCrawl import settings
+
+class SfDataCrawlPipeline(object):
+    host = '192.168.83.31'
+    user_name = 'root'
+    password = 'Jrcs@15F'
+    db_name = 'sf_crawl'
+    cursor = ''
+    conn = ''
+    def __init__(self):
+        try:
+            self.conn = MySQLdb.connect(self.host, self.user_name, self.password, self.db_name, charset='utf8',use_unicode=True)
+            self.cursor = self.conn.cursor()
+        except MySQLdb.Error,e:
+            print 'initial error'
+            print str(e)
+    def process_item(self, item, spider):
+        #test db in the localhost
+        if 'name1' in item:
+            try:
+                self.cursor.execute('INSERT INTO test(name) VALUES(%s)', [item['name1']])
+                self.conn.commit()
+            except MySQLdb.Error, e:
+                print "ERROR"
+        return item
+
+class SfProductPipeline(object):
+    def process_item(self,item,spider):
+        # return item
+        if 'crawl_product_id' in item and 'crawl_product_name' in item:
+            spider.spider_log.info('items log, product item')
+            conn = spider.conn
+            cursor = spider.cursor
+            product_dict = spider.product_dict
+            howbuy_product_dict = spider.howbuy_product_dict
+            product_name = item['crawl_product_name']
+            howbuy_id = item['crawl_product_id']
+            if howbuy_id not in howbuy_product_dict:
+                if product_name not in product_dict:
+                    #新产品，从未采集过
+                    try:
+                        cursor.execute(
+                            'INSERT INTO sf_product(crawl_id,name,full_name,nav_date,company_id,manager_list,start_date,trustee_bank,product_type,\
+                            company_name,min_purchase_amount,min_append_amount,structured,crawl_url,crawl_comapny_id,crawl_managers_list,crawl_create_time,crawl_update_time)\
+                             VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            [item['crawl_product_id'], item['crawl_product_name'], item['crawl_product_full_name'], item['nav_date'], 1008610010
+                            , item['manager_list'],item['start_date'],item['trustee_bank'],item['product_type'],item['company_name']
+                            ,item['min_purchase_amount'],item['min_append_amount'],item['structured'],item['crawl_url'],item['crawl_comapny_id'],item['manager_list'],item['now_time'],item['now_time']])
+                        cursor.execute('INSERT INTO sf_product_data(id,crawl_id,subscription_fee,fixed_management_fee,ransom_fee,commission,open_date,locked_time) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)',
+                            [int(conn.insert_id()),item['crawl_product_id'],item['subscription_fee'],item['fixed_management_fee'], item['ransom_fee'],item['commission'], item['open_date'], item['locked_time']])
+                        #self.spider_log.info('product id: ' + productData_id)
+                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print str(e)
+                else:
+                    product_info = product_dict[product_name]
+                    product_id = product_info['id']
+                    try:
+                        #该产品已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_product set crawl_id = %s,nav_date = %s,manager_list = %s,start_date = %s,trustee_bank = %s,product_type = %s\
+                         ,min_purchase_amount = %s,structured = %s,crawl_url = %s,crawl_comapny_id = %s,crawl_managers_list = %s,crawl_update_time = %s where id = %s',
+                         [howbuy_id,item['nav_date'],item['manager_list'],item['start_date'],item['trustee_bank'],item['product_type'],
+                         item['min_purchase_amount'],item['structured'],item['crawl_url'],item['crawl_comapny_id'],item['manager_list'],item['now_time'],product_id])
+                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                pass
+            else:
+                if product_name not in product_dict:
+                    #采集过，但是产品名字修改
+                    #TODO 需讨论
+                    pass
+                else:
+                    #完全匹配
+                    product_info = product_dict[product_name]
+                    product_id = product_info['id']
+                    try:
+                        #该产品已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_product set crawl_id = %s where id = %s',[howbuy_id , product_id])
+                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                    pass
+                pass
+                pass
+        return item
+
+class SfCompanyPipeline(object):
+    def process_item(self,item,spider):
+        # return item
+        # spider.spider_log.info('items log, company item')
+        if 'crawl_id' in item and 'name' in item:
+            conn = spider.conn
+            cursor = spider.cursor
+            company_dict = spider.company_dict
+            howbuy_company_dict = spider.howbuy_company_dict
+            company_name = item['name']
+            howbuy_id = item['crawl_id']
+            if howbuy_id not in howbuy_company_dict:
+                if company_name not in company_dict:
+                    #新产品，从未采集过
+                    try:
+                        cursor.execute(
+                            'INSERT INTO sf_company(crawl_url,crawl_create_time,crawl_update_time,crawl_id,full_name,\
+                            name,core_manager_name,rep_product_name,icp,establishment_date,registered_capital,region) \
+                            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                            [item['crawl_url'],item['crawl_create_time'],item['crawl_update_time'],
+                             item['crawl_id'],item['full_name'], item['name'], item['core_manager_name'],
+                             item['rep_product_name'],item['icp'],item['establishment_date'],
+                             item['registered_capital'],item['region']])
+                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                else:
+                    company_info = company_dict[company_name]
+                    company_id = company_info['id']
+                    try:
+                        #该产品已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_company set crawl_id=%s, crawl_update_time =%s, crawl_url=%s, core_manager_name=%s,'
+                                       'rep_product_name=%s, icp=%s, establishment_date=%s, registered_capital=%s, region=%s where id = %s',
+                                       [howbuy_id ,item['crawl_update_time'],item['crawl_url'],item['core_manager_name'],
+                                        item['rep_product_name'],item['icp'],item['establishment_date'],
+                                        item['registered_capital'],item['region'],company_id])
+                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                pass
+            else:
+                if company_name not in company_dict:
+                    #采集过，但是产品名字修改
+                    #TODO 需讨论
+                    pass
+                else:
+                    #完全匹配
+                    company_info = company_dict[company_name]
+                    company_id = company_info['id']
+                    try:
+                        #该产品已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                        cursor.execute('UPDATE sf_company set crawl_id = %s where id = %s',[howbuy_id , company_id])
+                        conn.commit()
+                    except MySQLdb.Error, e:
+                        print '**************', str(e)
+                    pass
+        return item
+
+
+class NavPipeline(object):
+    #sql连接
+    conn = MySQLdb.connect(settings.MYSQL_HOST, settings.MYSQL_USER, settings.MYSQL_PWD, settings.MYSQL_DB,charset='utf8', use_unicode=True)
+    cursor = conn.cursor()
+    #sql查询的最新数据
+    nav_dict = dict()
+    #抓取的最新数据
+    crawl_data = {}
+    def process_item(self, item, spider):
+        if 'crawl_id' in item and 'added_nav' in item:
+            param = (str(item['product_id'][0]),str(item['nav_date'][0]),str(item['nav'][0]),str(item['added_nav'][0]),str(item['growth_rate'][0]),str(item['create_time'][0]),str(item['update_time'][0]),str(item['crawl_time'][0]),str(item['crawl_url'][0]),str(item['crawl_id'][0]))
+            sql = 'insert into sf_nav(product_id,nav_date,nav,added_nav,growth_rate,create_time,update_time,crawl_time,crawl_url,crawl_id) values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)'
+            #sql查询最新的数据
+            self.cursor.execute('SELECT product_id, MAX(nav_date) FROM sf_nav GROUP BY product_id')
+            navs = self.cursor.fetchall()
+            for nav in navs:
+                id = nav[0]
+                date = nav[1]
+                nav_data = {
+                    'date' : str(date),
+                }
+                #把最新时间放入字典比对抓取时间
+                self.nav_dict[str(id)] = nav_data
+            product_id = str(item['product_id'][0])
+            if( product_id in self.nav_dict.keys() and str(self.nav_dict[product_id]['date']) >= str(item['nav_date'][0])):
+                pass
+            else:
+                try:
+                    self.cursor.execute(sql, param)
+                    self.conn.commit()
+                    print "INSERT was successful"
+                except MySQLdb.Error, e:
+                    spider.spider_log.info('插入失败的produt_id: '+str(item['product_id'][0])+','+str(item['nav'][0])+','+str(item['added_nav'][0])+','+str(item['growth_rate'][0])+','+str(item['create_time'][0])+','+str(item['update_time'][0])+','+str(item['crawl_url'][0])+','+str(item['crawl_id'][0])+'抓取的时间：'+str(item['nav_date'][0]))
+                pass
+            pass
+        return item
+        # return item
+
+class SfManagerPipeline(object):
+    def process_item(self,item,spider):
+        if 'typical_product_id' in item:
+            conn = spider.conn
+            cursor = spider.cursor
+            manager_dict = spider.manager_dict
+            howbuy_manager_dict = spider.howbuy_manager_dict
+            manager_name = item['manager_name']
+            company_name = item['company_name']
+            howbuy_id = item['crawl_id']
+            if manager_name not in manager_dict:
+                #新经理，从未采集过
+                try:
+                    cursor.execute(
+                        'INSERT INTO sf_manager(name,company_name,profile,background,invest_year,manage_product_num,crawl_id,crawl_company_id,crawl_product_id,\
+                        crawl_create_time) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        [item['manager_name'],item['company_name'],item['profile'],item['background'],item['invest_year'], item['manage_product_num'], item['crawl_id'], item['company_id'],item['typical_product_id'],item['now_time']])
+                    conn.commit()
+                except MySQLdb.Error, e:
+                    print '**************', str(e)
+            elif company_name not in manager_dict and manager_name in manager_dict:
+                try:
+                    cursor.execute(
+                        'INSERT INTO sf_manager(name,company_name,profile,background,invest_year,manage_product_num,crawl_id,crawl_company_id,crawl_product_id,\
+                        crawl_create_time) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)',
+                        [item['manager_name'],item['company_name'],item['profile'],item['background'],item['invest_year'], item['manage_product_num'], item['crawl_id'], item['company_id'],item['typical_product_id'],item['now_time']])
+                    conn.commit()
+                except MySQLdb.Error, e:
+                    print '**************', str(e)
+            else:
+                manager_info = manager_dict[manager_name]
+                manager_id = manager_info['id']
+                company_name = manager_info['company_name']
+                try:
+                    #该经理已经存在，可能为手工录入，可能是第一次采集，故无匹配关系
+                    cursor.execute('UPDATE sf_manager set profile=%s, background =%s, invest_year=%s, manage_product_num=%s,\
+                    crawl_id=%s, crawl_company_id=%s, crawl_product_id=%s, crawl_update_time=%s where id = %s and company_name = %s',[item['profile'],
+                    item['background'],item['invest_year'], item['manage_product_num'], item['crawl_id'], item['company_id'],item['typical_product_id'],item['now_time'],manager_id,company_name])
+                    conn.commit()
+                except MySQLdb.Error, e:
+                    print '**************', str(e)
+        return item

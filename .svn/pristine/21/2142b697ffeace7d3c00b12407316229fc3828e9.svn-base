@@ -1,0 +1,246 @@
+# -*- coding: utf-8 -*-
+import scrapy
+from sfDataCrawl.items import TestItem
+from sfDataCrawl.items import ProductItem
+from sfDataCrawl.items import CompanyItem
+from scrapy.http import FormRequest
+import json
+import logging
+import datetime
+import MySQLdb
+import re
+from os import path
+from sfDataCrawl import settings
+import time
+from sfDataCrawl.items import NavItem
+from scrapy.loader import ItemLoader
+
+
+class SimuSpider(scrapy.Spider):
+    name = "simu"
+    total_page = 0
+    current_page = 1
+    spider_log = ''
+    conn = ''
+    cusor = ''
+    # 当前已经存在的产品
+    product_dict = dict()
+    # 当前已经抓取的howbuy产品
+    howbuy_product_dict = dict()
+    # 当前已经存在的公司
+    company_dict = dict()
+    # 当前已经抓取的hobuy公司
+    howbuy_company_dict = dict()
+    def __init__(self):
+        current_path = path.abspath('.')
+        file_name = 'spider_warning'+ datetime.date.today().strftime('%Y-%m-%d') + '.log'
+    #    file_name = current_path + '/sfDataCrawl/runningLog/spider_warning'+ datetime.date.today().strftime('%Y-%m-%d') + '.log'
+
+        warning_file_hanlder = logging.FileHandler(file_name)
+        warning_file_hanlder.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+        self.spider_log = logging.getLogger('spider_log')
+        self.spider_log.addHandler(warning_file_hanlder);
+        try:
+            self.conn = MySQLdb.connect(settings.MYSQL_HOST, settings.MYSQL_USER, settings.MYSQL_PWD, settings.MYSQL_DB, charset='utf8',use_unicode=True)
+            self.cursor = self.conn.cursor()
+            self.cursor.execute('SELECT id,name,status,crawl_id,crawl_update_time FROM sf_product')
+            products = self.cursor.fetchall()
+            for product in products:
+                id = product[0]
+                name = product[1]
+                status = product[2]
+                howbuy_id = product[3]
+                howbuy_update_time = product[4]
+                product_info = {
+                    'id' : id,
+                    'name' : name,
+                    'status' : status,
+                    'howbuy_id' : howbuy_id,
+                    'howbuy_update_time' : howbuy_update_time
+                }
+                self.product_dict[name] = product_info
+                self.howbuy_product_dict[howbuy_id] = product_info
+            # 公司字典
+            self.cursor.execute('SELECT id,name,status,crawl_id,crawl_update_time FROM sf_company')
+            companies = self.cursor.fetchall()
+            for company in companies:
+                id = company[0]
+                name = company[1]
+                status = company[2]
+                crawl_id = company[3]
+                crawl_update_time = company[4]
+                company_info = {
+                    'id' : id,
+                    'name' : name,
+                    'status' : status,
+                    'howbuy_id' : crawl_id,
+                    'howbuy_update_time' : crawl_update_time
+                }
+                self.company_dict[name] = company_info
+                self.howbuy_company_dict[crawl_id] = company_info
+        except MySQLdb.Error,e:
+            print 'initial error'
+            print str(e)
+        pass
+    def start_requests(self):
+        urls = [
+            'https://simu.howbuy.com/mlboard.htm'
+        ]
+        board_url = "https://simu.howbuy.com/mlboard.htm"
+        #board_url = "https://simu.howbuy.com/shenhaishitouzi/"
+        self.spider_log.info(board_url)
+        yield scrapy.Request(board_url,callback=self.parse)
+        # for url in urls:
+        #     yield scrapy.Request(url=url, callback=self.parse)
+
+    def parse(self, response):
+        temp_total_page = response.xpath('//*[@id="allPage"]/@value').extract_first()
+        #TODO for testing
+        temp_total_page = 1
+        if self.total_page < 1 and temp_total_page is not None:
+            self.total_page = temp_total_page
+        #循环获取1-20的tr  注意当获取的每页的条数发生变化  这里要跟着变化
+        for i in range(1,21):
+            product = response.xpath('//*[@id="spreadDetails"]/tr['+str(i)+']/td[3]/a/@href').extract_first()
+            product_name = response.xpath(u'//*[@id="spreadDetails"]/tr['+str(i)+']/td[3]/a/text()').extract_first()
+            if product_name in self.product_dict:
+                if self.product_dict[product_name]['status'] == 0:
+                    self.spider_log.info('product URL: ' + product)
+                    yield scrapy.Request(product,self.parse_product)
+            else:
+                self.spider_log.info('product URL: ' + product)
+                yield scrapy.Request(product,self.parse_product)
+        if self.current_page < self.total_page :
+            self.current_page += 1
+            next_page_data = {
+                "orderType": "Desc",
+                "sortField": "jzrq",
+                "ejfl": "",
+                "gzkxd": '1',
+                "skey": "",
+                "page": str(self.current_page),
+                "perPage": '20'
+            }
+            board_url = "https://simu.howbuy.com/mlboard.htm"
+            self.spider_log.info('product list URL: ' + board_url)
+            yield FormRequest(board_url,callback=self.parse,formdata=next_page_data)
+
+    def parse_product(self,response):
+        product_name = response.xpath("//div[contains(@class, 'trade_fund_top_dotted')]//h1/text()").extract_first()
+        item = ProductItem()
+        product_url = response.url
+        item['crawl_product_id'] = product_url.split("/")[-2]
+        item['crawl_product_name'] = product_name
+        item['crawl_product_full_name'] = response.xpath('//div[contains(@class,"part_a")]//tr[1]/td[2]/text()').extract_first()
+        item['start_date'] = response.xpath('//div[contains(@class,"part_a")]//tr[9]/td[2]/text()').extract_first()
+        item['trustee_bank'] = response.xpath('//div[contains(@class,"part_a")]//tr[4]/td[2]/text()').extract_first()
+        item['status'] = response.xpath('//div[contains(@class,"part_a")]//tr[12]/td[2]/text()').extract_first()
+        item['product_type'] = 0#response.xpath('//div[contains(@class,"part_a")]//tr[2]/td[2]/text()').extract_first()
+        item['company_name'] = response.xpath('//div[contains(@class,"trade_fund_top_dotted_bott")]//p[3]/a/text()').extract_first()
+        item['min_purchase_amount'] = response.xpath('//div[contains(@class,"instruction_box")]//tr[1]/td[2]/text()').re_first(r'\d+')
+        item['min_append_amount'] = 0#response.xpath('//div[contains(@class,"instruction_box")]//tr[7]/td[2]/text()').extract_first()
+        structured = response.xpath('//div[contains(@class,"part_a")]//tr[10]/td[2]/text()').extract_first()
+        if structured == "非结构化" :
+            item['structured'] = 0
+        else :
+            item['structured'] = 1
+        item['nav_date'] = response.xpath("//div[contains(@class, 'net_value')]//div[contains(@class,'tb_chart')]//tr[2]/td[1]/text()").extract_first()
+        item['crawl_url'] = response.url
+        item['crawl_comapny_id'] = response.xpath('//div[contains(@class,"trade_fund_top_dotted_bott")]//p[3]/a/@href').re_first(r'https://simu.howbuy.com/(.+)/$')
+        item['crawl_managers_id'] = response.xpath('//div[contains(@class,"fund_class")]/div[contains(@class,"fund_tabs")]//span/@code').extract_first()
+        item['crawl_managers_name'] = response.xpath('//div[contains(@class,"fund_class")]/div[contains(@class,"fund_tabs")]//span/text()').extract_first()
+        item['now_time'] = datetime.date.today().strftime('%Y-%m-%d') 
+        #fubiao
+        item['locked_time'] = response.xpath("//div[contains(@class,'part_a')]//tr[7]/td[2]/text()").extract_first()
+        item['open_date'] = response.xpath("//div[contains(@class,'part_a')]//tr[5]/td[2]/text()").extract_first()
+        item['commission'] = response.xpath("//div[contains(@class,'instruction_box')]//tr[5]/td[5]/text()").extract_first()
+        item['ransom_fee'] = response.xpath("//div[contains(@class,'instruction_box')]//tr[6]/td[4]/text()").extract_first()
+        item['fixed_management_fee'] = response.xpath("//div[contains(@class,'instruction_box')]//tr[4]/td[3]/text()").extract_first()
+        item['subscription_fee'] = response.xpath("//div[contains(@class,'instruction_box')]//tr[3]/td[2]/text()").extract_first()
+        company_url = response.xpath("//div[contains(@class, 'trade_fund_top_dotted_bott')]//p[contains(@class,'p3')]//a/@href").extract_first()
+        yield scrapy.Request(company_url,self.parse_company)
+        #fubiao jieshu
+        if item['crawl_managers_id'] is not None :
+            item['manager_list'] = item['crawl_managers_id'] + ';' + item['crawl_managers_name']
+        else :
+            item['manager_list'] = ';'
+        script = response.xpath('/html/body/script[13]/@src')
+        srcipt_url = script.extract_first()
+        # js的url
+        self.spider_log.info('js URL: ' + srcipt_url)
+        yield scrapy.Request(srcipt_url, callback=self.get_script)
+        yield item
+
+    def parse_company(self,response):
+        item = CompanyItem()
+        item['crawl_url'] = response.url
+        item['crawl_id'] = response.xpath("//*[@id='pageid']/@value").extract_first()
+        item['name'] = response.xpath("//div[contains(@class,'con_left')]//h2/text()").extract_first()
+        item['core_manager_name'] = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'fund_about')]//li[0]/text()").extract_first()
+        rep_product = response.xpath("//*[@id='nTab7_Con1']/div[contains(@class,'contrast_left')]/@jjdm").extract_first()
+        item['icp'] = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'company_about')]//li[1]//span/text()").extract_first()
+        item['establishment_date']  = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'company_about')]//li[3]//span/text()").extract_first()
+        item['registered_capital'] = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'fund_about')]//li[3]//span/text()").re_first(r'\d+')
+        item['region'] = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'company_about')]//li[2]//span/text()").extract_first()
+        item['asset_mgmt_scale'] = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'fund_about')]//li[3]//span/text()").extract_first()
+        item['full_name'] = item['name']
+        item['rep_product_name'] = response.xpath("//div[contains(@class,'contrast_right')]//p[1]/a/text()").extract_first()
+        item['crawl_update_time'] = datetime.date.today().strftime('%Y-%m-%d')
+        item['crawl_create_time'] = datetime.date.today().strftime('%Y-%m-%d')
+        return item
+
+    def parse_empty(self,response):
+        pass
+
+    def parse_empty(self, response):
+        pass
+    #抓取js
+
+    def get_script(self, response):
+        # 读取URL从url中获取抓取id
+        url = response.url
+        crawl_id = url.split("_")[-2]
+        body = response.body
+        data_arr = body.split(';')[0]
+        data = data_arr.split('=')[-1]
+        # 加上单引号变成json字符串
+        string = data.replace("'", '"')
+        string = string.replace("u", "")
+        pat = '\"\\1\"'
+        rep_str = re.sub("([a-zA-Z]+)", pat, string)
+        dic = json.loads(rep_str)
+        return_data = self.chkData(dic)
+        # 循环迭代加入
+        for next_data in return_data:
+            l = ItemLoader(item=NavItem(), response=response)
+            print self.howbuy_product_dict
+            id = self.howbuy_product_dict[str(crawl_id)]['id']
+            l.add_value('product_id', id)
+            l.add_value('crawl_id', str(crawl_id))
+            l.add_value('nav_date', next_data['nav_date'])
+            l.add_value('added_nav', next_data['added_nav'])
+            l.add_value('nav', next_data['nav'])
+            l.add_value('growth_rate', next_data['growth_rate'])
+            l.add_value('create_time', next_data['create_time'])
+            l.add_value('update_time', next_data['update_time'])
+            l.add_value('crawl_time', time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time())))
+            l.add_value('crawl_url', url)
+            yield l.load_item();
+    # 处理json的数据
+    def chkData(self, dic):
+        for list in dic[u'navList']:
+            item = {}
+            arr = list.split(',')
+            if arr[3] == 0:
+                arr[3] = 12
+            # 净值日期
+            item['nav_date'] = arr[2] + '-' + arr[3] + '-' + arr[4]
+            # 累计净值
+            item['added_nav'] = arr[6]
+            # 净值日期
+            item['nav'] = arr[5]
+            # 增长率
+            item['growth_rate'] = '1.00'
+            item['create_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+            item['update_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
+            yield item
