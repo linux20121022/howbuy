@@ -17,9 +17,8 @@ from sfDataCrawl.items import NavItem
 from scrapy.loader import ItemLoader
 from sfDataCrawl.items import MonthItem
 from sfDataCrawl.items import HsReturnItem
-
 NOT_EXISTED_COMPANY_ID = None
-
+MAX_CRAWL_PAGE = 500
 class SimuSpider(scrapy.Spider):
     name = "simu"
     total_page = 0
@@ -50,10 +49,12 @@ class SimuSpider(scrapy.Spider):
     crawl_day = 2
     #产品类型
     product_type_dict = {'股票型':0,'管理期货':2,'市场中性':4,'多空仓型':4,'套利型':3,'定向增发':1,'多策略':7,'组合型':6,'债券型':5,'货币型':8,'宏观策略':8,'其他':8}
+    #经理类型
+    manager_background = {'公募':1,'券商':2,'民间':3,'期货':4,'保险':5,'海外':6,'实业':7,'媒体':8,'学者':10,'其它':9}
     def __init__(self):
         current_path = path.abspath('.')
         # file_name = 'spider_warning'+ datetime.date.today().strftime('%Y-%m-%d') + '.log'
-        file_name = current_path + '/sfDataCrawl/runningLog/spider_warning'+ datetime.date.today().strftime('%Y-%m-%d') + '.log'
+        file_name = current_path + '/sfDataCrawl/runningLog/crawl_log_'+ datetime.date.today().strftime('%Y-%m-%d') + '.log'
         
         logging.getLogger('scrapy').setLevel(logging.ERROR)
 
@@ -79,8 +80,17 @@ class SimuSpider(scrapy.Spider):
                     'howbuy_id' : howbuy_id,
                     'howbuy_update_time' : howbuy_update_time
                 }
-                self.product_dict[name] = product_info
-                self.howbuy_product_dict[howbuy_id] = product_info
+                if(name in self.product_dict):
+                    if(status == 0):
+                        self.product_dict[name] = product_info
+                        if(howbuy_id is not None):
+                            self.howbuy_product_dict[howbuy_id] = product_info
+                    else:
+                        pass
+                else:
+                    self.product_dict[name] = product_info
+                    if (howbuy_id is not None):
+                        self.howbuy_product_dict[howbuy_id] = product_info
             # 公司字典
             self.cursor.execute('SELECT id,name,status,crawl_id,crawl_update_time FROM sf_company')
             companies = self.cursor.fetchall()
@@ -97,8 +107,18 @@ class SimuSpider(scrapy.Spider):
                     'howbuy_id' : crawl_id,
                     'howbuy_update_time' : crawl_update_time
                 }
-                self.company_dict[name] = company_info
-                self.howbuy_company_dict[crawl_id] = company_info
+                if (name in self.howbuy_company_dict):
+                    if (status == 0):
+                        self.company_dict[name] = company_info
+                        if (crawl_id is not None):
+                            self.howbuy_company_dict[crawl_id] = company_info
+                    else:
+                        pass
+                else:
+                    self.company_dict[name] = company_info
+                    if (crawl_id is not None):
+                        self.howbuy_company_dict[crawl_id] = company_info
+
             #经理字典
             self.cursor.execute('SELECT id,name,status,crawl_id,crawl_update_time,company_name FROM sf_manager')
             managers = self.cursor.fetchall()
@@ -117,8 +137,20 @@ class SimuSpider(scrapy.Spider):
                     'howbuy_update_time' : crawl_update_time,
                     'company_name' : company_name
                 }
-                self.manager_dict[name+'-'+company_name] = manager_info
-                self.howbuy_manager_dict[crawl_id] = manager_info
+                str_name = name+'-'+company_name
+
+                if (str_name in self.howbuy_manager_dict):
+                    if (status == 0):
+                        self.manager_dict[str_name] = manager_info
+                        if (crawl_id is not None):
+                            self.howbuy_manager_dict[crawl_id] = manager_info
+                    else:
+                        pass
+                else:
+                    self.manager_dict[str_name] = manager_info
+                    if (crawl_id is not None):
+                        self.howbuy_manager_dict[crawl_id] = manager_info
+
             #hs300字典
             self.get_hs_dict()
             # sql查询最新的数据
@@ -162,54 +194,59 @@ class SimuSpider(scrapy.Spider):
             "jgxs": "",
             "gzkxd": '1',
             "skey": "",
-            "page": '1',
+            "page": '3',
             "perPage": '100'
         }
         yield FormRequest(board_url, callback=self.parse, formdata=page_data)
-        #yield scrapy.Request('https://simu.howbuy.com/manager/30043518.html',self.parse_manager)
-        #yield scrapy.Request('https://simu.howbuy.com/zixi/S80358/', callback=self.parse_product)
-        # for url in urls:
-        #     yield scrapy.Request(url=url, callback=self.parse)
-
+        #yield scrapy.Request('https://simu.howbuy.com/donghuaqihuo/S35209/', callback=self.parse_product)
     def parse(self, response):
         #沪深300
         hs_url = "http://quotes.money.163.com/trade/lsjysj_zhishu_000300.html"
         yield scrapy.Request(hs_url,self.get_hs)
         temp_total_page = response.xpath('//*[@id="allPage"]/@value').extract_first()
-        # #TODO for testing
+        # # #TODO for testing
         temp_total_page = 1
         if self.total_page < 1 and temp_total_page is not None:
             self.total_page = temp_total_page
+        if self.total_page > MAX_CRAWL_PAGE:
+            #临时固定50000万产品，如果超过暂不抓取
+            self.total_page = MAX_CRAWL_PAGE
+        if self.current_page > self.total_page:
+            return
         #循环获取1-20的tr  注意当获取的每页的条数发生变化  这里要跟着变化
         per_page_line = 100
         for i in range(1,per_page_line+1):
             product = response.xpath('//*[@id="spreadDetails"]/tr['+str(i)+']/td[3]/a/@href').extract_first()
             product_name = response.xpath(u'//*[@id="spreadDetails"]/tr['+str(i)+']/td[3]/a/text()').extract_first()
-            if product_name in self.product_dict:
-                if self.product_dict[product_name]['status'] == 0:
+            if product is not None:
+                if product_name in self.product_dict:
+                    if self.product_dict[product_name]['status'] == 0:
+                        self.spider_log.info('product URL: ' + product)
+                        if '/--/' not in product:
+                            #公司不存在的产品不抓取
+                            yield scrapy.Request(product,self.parse_product)
+                else:
                     self.spider_log.info('product URL: ' + product)
                     if '/--/' not in product:
-                        #公司不存在的产品不抓取
-                        yield scrapy.Request(product,self.parse_product)
-            else:
-                self.spider_log.info('product URL: ' + product)
-                yield scrapy.Request(product,self.parse_product)
-        if self.current_page < self.total_page :
+                        # 公司不存在的产品不抓取
+                        yield scrapy.Request(product, self.parse_product)
+        if self.current_page < self.total_page:
             self.current_page += 1
             next_page_data = {
                 "orderType": "Desc",
                 "sortField": "jzrq",
                 "ejfl": "",
+                "jgxs": "",
                 "gzkxd": '1',
                 "skey": "",
                 "page": str(self.current_page),
                 "perPage": '100'
             }
             board_url = "https://simu.howbuy.com/mlboard.htm"
-            self.spider_log.info('product list URL: ' + board_url)
+            self.spider_log.info('product list URL: ' + board_url + ' current page is ' + str(self.current_page) + ' and total page is ' + str(self.total_page))
             yield FormRequest(board_url,callback=self.parse,formdata=next_page_data)
-
-
+        # yield scrapy.Request('https://simu.howbuy.com/maopaoge/P24176/', callback=self.parse_product)
+        # yield scrapy.Request('https://simu.howbuy.com/huoyantouzi/S33275/', callback=self.parse_product)
     def parse_product(self,response):
         product_name = response.xpath("//div[contains(@class, 'trade_fund_top_dotted')]//h1/text()").extract_first()
         item = ProductItem()
@@ -225,12 +262,20 @@ class SimuSpider(scrapy.Spider):
             howbuy_update_time = '1980-01-01 00:00:00'
         if(self._no_crawl(howbuy_update_time) == 1):
             item['crawl_product_full_name'] = response.xpath('//div[contains(@class,"part_a")]//tr[1]/td[2]/text()').extract_first()
+            item['org_form'] = response.xpath('//div[contains(@class,"part_a")]//tr[3]/td[2]/text()').extract_first()
             item['start_date'] = response.xpath('//div[contains(@class,"part_a")]//tr[9]/td[2]/text()').extract_first()
-            item['trustee_bank'] = response.xpath('//div[contains(@class,"part_a")]//tr[4]/td[2]/text()').extract_first()
+            bank_name = response.xpath('//div[contains(@class,"part_a")]//tr[4]/td[2]/text()').extract_first()
+            if bank_name == "未设".decode('utf-8'):
+                item['trustee_bank'] = '--'
+            else:
+                item['trustee_bank'] = bank_name
             item['status'] = response.xpath('//div[contains(@class,"part_a")]//tr[12]/td[2]/text()').extract_first()
             #item['product_type'] = 0 response.xpath('//div[contains(@class,"part_a")]//tr[2]/td[2]/text()').extract_first()
             product_type_data = response.xpath('//div[contains(@class,"part_a")]//tr[2]/td[2]/text()').extract_first()
-            item['product_type'] = self.product_type_dict[product_type_data.encode("utf-8") ]
+            if(product_type_data is None):
+                item['product_type'] = None
+            else:
+                item['product_type'] = self.product_type_dict[product_type_data.encode("utf-8") ]
             item['company_name'] = response.xpath('//div[contains(@class,"trade_fund_top_dotted_bott")]//p[3]/a/text()').extract_first()
             item['min_purchase_amount'] = response.xpath('//div[contains(@class,"instruction_box")]//tr[1]/td[2]/text()').re_first(r'\d+')
             item['min_append_amount'] = response.xpath('//div[contains(@class,"instruction_box")]//tr[7]/td[2]/text()').extract_first()
@@ -245,8 +290,14 @@ class SimuSpider(scrapy.Spider):
             item['nav_date'] = response.xpath("//div[contains(@class, 'net_value')]//div[contains(@class,'tb_chart')]//tr[2]/td[1]/text()").extract_first()
             item['crawl_url'] = response.url
             item['crawl_company_id'] = response.xpath('//div[contains(@class,"trade_fund_top_dotted_bott")]//p[3]/a/@href').re_first(r'https://simu.howbuy.com/(.+)/$')
-            item['crawl_managers_id'] = response.xpath('//div[contains(@class,"fund_class")]/div[contains(@class,"fund_tabs")]//span/@code').extract_first()
-            item['crawl_managers_name'] = response.xpath('//div[contains(@class,"fund_class")]/div[contains(@class,"fund_tabs")]//span/text()').extract_first()
+            manager_lists = response.xpath('//div[contains(@class,"fund_class")]/div[contains(@class,"fund_tabs")]//span')
+            id_list = []
+            name_list = []
+            for i in range(1,len(manager_lists)+1):
+                id = response.xpath('//div[contains(@class,"fund_class")]/div[contains(@class,"fund_tabs")]//span['+str(i)+']/@code').extract_first()
+                name = response.xpath('//div[contains(@class,"fund_class")]/div[contains(@class,"fund_tabs")]//span['+str(i)+']/text()').extract_first()
+                id_list.append(str(id))
+                name_list.append(name)
             item['now_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
             #fubiao
             item['locked_time'] = response.xpath("//div[contains(@class,'part_a')]//tr[7]/td[2]/text()").extract_first()
@@ -268,7 +319,7 @@ class SimuSpider(scrapy.Spider):
                     company_howbuy_update_time = self.company_dict[item['company_name']]['howbuy_update_time']
                     if company_howbuy_update_time is not None:
                         need_crawl = self._no_crawl(str(company_howbuy_update_time))
-                        if need_crawl == 1:
+                        if need_crawl != 1:
                             skip_company = True
 
                 if skip_company != True:
@@ -279,29 +330,44 @@ class SimuSpider(scrapy.Spider):
                 #没有公司的产品直接跳过
                 return
             #maager url
-            manager_url = response.xpath("//div[contains(@class, 'trade_fund_top_dotted')]/div[2]/p[3]/span/a/@href").extract_first()
-            if manager_url is not None :
-                skip_manager = False
-                if item['crawl_managers_id'] in self.howbuy_manager_dict:
-                    manager_howbuy_udpate_time = self.howbuy_manager_dict[item['crawl_managers_id']]['howbuy_update_time']
-                    if manager_howbuy_udpate_time is not None:
-                        need_crawl = self._no_crawl(str(manager_howbuy_udpate_time))
-                        if need_crawl == 1:
-                            skip_manager = True
-                # self.howbuy_manager_dict[crawl_id]
-                if skip_manager != True:
-                   self.spider_log.info('--------manage URL----------: ' + manager_url)
-                   yield scrapy.Request(manager_url,callback=self.parse_manager)
+            manager_url_list = response.xpath("//div[contains(@class, 'trade_fund_top_dotted')]/div[2]/p[3]/span/a/@href")
+            for i in range(1, len(manager_url_list) + 1):
+                manager_url = response.xpath("//div[contains(@class, 'trade_fund_top_dotted')]/div[2]/p[3]/span/a["+str(i)+"]/@href").extract_first()
+                if manager_url is not None :
+                    skip_manager = False
+                    for manager_list in id_list:
+                        if manager_list in self.howbuy_manager_dict:
+                            manager_howbuy_udpate_time = self.howbuy_manager_dict[manager_list]['howbuy_update_time']
+                            if manager_howbuy_udpate_time is not None:
+                                need_crawl = self._no_crawl(str(manager_howbuy_udpate_time))
+                                if need_crawl != 1:
+                                    skip_manager = True
+                        # self.howbuy_manager_dict[crawl_id]
+                        if skip_manager != True:
+                            self.spider_log.info('--------manage URL----------: ' + manager_url)
+                            yield scrapy.Request(manager_url,callback=self.parse_manager)
+
             #fubiao jieshu
-            crawl_manager_id = item['crawl_managers_id']
-            if item['crawl_managers_id'] is not None :
-                if crawl_manager_id in self.howbuy_manager_dict:
-                    oManager = self.howbuy_manager_dict[crawl_manager_id]
-                    item['manager_list'] = str(oManager['id']) + ',' + oManager['name']
-                else:
-                    item['manager_list'] = item['crawl_managers_id'] + ',' + item['crawl_managers_name']+';'
-            else :
-                item['manager_list'] = ';'
+            # crawl_manager_id = item['crawl_managers_id']
+            manager_list_arr = []
+            crawl_manager = []
+            i = 0
+            for manager_list in id_list:
+                if manager_list is not None :
+                    if manager_list in self.howbuy_manager_dict:
+                        oManager = self.howbuy_manager_dict[manager_list]
+                        str_list = str(oManager['id']) + ',' + oManager['name']
+                    else:
+                        str_list = manager_list + ',' + name_list[i]
+                    lists_data = manager_list + ',' + name_list[i]
+                else :
+                    str_list = ';'
+                    lists_data = ';'
+                manager_list_arr.append(str_list);
+                crawl_manager.append(lists_data);
+                i = i+1
+            item['manager_list'] = ";".join(manager_list_arr)+';'
+            item['crawl_managers_list'] = ";".join(crawl_manager) + ';'
             crawl_company_id = item['crawl_company_id']
             if crawl_company_id in self.howbuy_company_dict:
                 item['company_id'] = self.howbuy_company_dict[crawl_company_id]['id']
@@ -328,10 +394,22 @@ class SimuSpider(scrapy.Spider):
         else:
             howbuy_update_time = '1980-01-01 00:00:00'
         if (self._no_crawl(howbuy_update_time) == 1):
-            item['core_manager_name'] = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'fund_about')]//li[0]/text()").extract_first()
+            item['core_manager_name'] = response.xpath("//*[@id='jjjl1']/text()").extract_first()
+            manager_list = response.xpath("//*[@id='fund_manager1']/div/div/div[2]/p[1]/a")
+        #//*[@id="fund_manager1"]/div[2]/div/div[2]/p[1]/a
+            company_manager = {}
+            for i in xrange(len(manager_list)):
+                name = response.xpath("//*[@id='fund_manager1']/div[2]/div[" + str(i) + "]/div[2]/p[1]/a/text()").extract_first()
+                url = response.xpath("//*[@id='fund_manager1']/div[2]/div[" + str(i) + "]/div[2]/p[1]/a/@href").extract_first()
+                if(url is not None):
+                    manager_split = url.split('/')
+                    manager_arr = manager_split[len(manager_split) - 1].split('.')
+                    company_manager[name] = manager_arr[0]
             rep_product = response.xpath("//*[@id='nTab7_Con1']/div[contains(@class,'contrast_left')]/@jjdm").extract_first()
             item['icp'] = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'company_about')]//li[1]//span/text()").extract_first()
             item['establishment_date']  = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'company_about')]//li[3]//span/text()").extract_first()
+            if(self._is_time(item['establishment_date']) == False):
+                item['establishment_date'] = None
             registered_capital_selector = response.xpath("//div[contains(@class,'company_detail')]//ul[contains(@class,'fund_about')]//li[3]//span/text()")
             registered_capital = registered_capital_selector.extract_first()
             if registered_capital == '--':
@@ -352,7 +430,11 @@ class SimuSpider(scrapy.Spider):
             if item['name'] is None:
                 return
             else:
-                yield item
+                # yield item
+                ######抓取公司详情######
+                company_js_url = 'https://simu.howbuy.com/profile/smFundIndexCompanyPart.htm'
+                ajax_data = {'jgdm': str(item['crawl_id'])}
+                yield FormRequest(company_js_url, callback=self.company_summary_ajax, formdata=ajax_data, meta={'item':item,'company_manager':company_manager})
         else:
             pass
 
@@ -395,19 +477,19 @@ class SimuSpider(scrapy.Spider):
                 nav_date.append(next_data['nav_date'])
                 nav_date.append(round(float(next_data['added_nav']),4))
                 nav_date.append(round(float(next_data['nav']),4))
-                growth_rate = round(float(next_data['growth_rate']),4)
+                growth_rate = round(float(next_data['growth_rate'])*100,4)
                 nav_date.append(growth_rate)
                 nav_date.append(current_time)
                 nav_date.append(current_time)
                 nav_date.append(current_time)
                 nav_date.append(url)
-                if (product_id in self.nav_dict.keys() and str(self.nav_dict[product_id]['date']) >= str(next_data['nav_date'])):
+                if (product_id in self.nav_dict.keys() and str(max_date) >= str(next_data['nav_date'])):
                     pass
                 else:
                     items.append(tuple(nav_date))
                 if next_data['nav_date'] > max_date:
                     max_date = next_data['nav_date']
-                self.nav_dict[product_id]['date'] = max_date
+                    self.nav_dict[product_id]['date'] = max_date
             l.add_value('nav_item_date', items)
             l.add_value('product_id', product_id)
             yield l.load_item();
@@ -416,17 +498,23 @@ class SimuSpider(scrapy.Spider):
 
     # 处理json的数据
     def chkData(self, dic,product_id):
+        if (dic[u'jzdw'] is not None):
+            n = float(dic[u'jzdw'][0])
+        else:
+            n = 1
         for list in dic[u'navList']:
             item = {}
             arr = list.split(',')
             if arr[3] == 0:
                 arr[3] = 12
+            arr[6] = float(arr[6])
             # 净值日期
             item['nav_date'] = arr[2] + '-' + arr[3] + '-' + arr[4]
             # 累计净值
-            item['added_nav'] = arr[6]
+            item['added_nav'] = arr[6]/n
             # 净值
-            item['nav'] = arr[5]
+            item['nav'] = float(arr[5])/n
+
             # 增长率
             # item['growth_rate'] = '1.00'
             #最新的净值日期
@@ -443,7 +531,7 @@ class SimuSpider(scrapy.Spider):
             #     item['growth_rate'] = 0.00
             # else:
                 # growth_rate = (float(arr[5])-float(results_first[0]))/float(results_first[0])
-            item['growth_rate'] = float(arr[6]) - 1
+            item['growth_rate'] = item['added_nav'] - 1
                 # item['growth_rate'] = float('%.4f' % growth_rate)
             item['create_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
             item['update_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
@@ -468,6 +556,10 @@ class SimuSpider(scrapy.Spider):
                 yield scrapy.Request(company_url, self.parse_company)
         item['crawl_company_id'] = crawl_company_id
         item['company_name'] = response.xpath('//*[@id="szgs"]/text()').extract_first()
+        if item['manager_name'] is None:
+            item['manager_name'] = ''
+        if item['company_name'] is None:
+            item['company_name'] = ''
         name = item['manager_name']+'-'+item['company_name']
         if (name in self.manager_dict):
             if (self.manager_dict[name]['howbuy_update_time'] is not None):
@@ -478,7 +570,11 @@ class SimuSpider(scrapy.Spider):
             howbuy_update_time = '1980-01-01 00:00:00'
         if (self._no_crawl(howbuy_update_time) == 1):
             item['profile'] = response.xpath('//div[contains(@class,"manager_des_content")]/div[1]/div/text()').extract_first()
-            item['background'] = 1#response.xpath('//*[@id="experience"]/div[3]/div[2]//tr[2]/td[2]/text()').extract_first()
+            background_value =  response.xpath('//*[@id="experience"]/div[3]/div[2]//tr[2]/td[2]/text()').extract_first()
+            if background_value is None or background_value not in background_value:
+                item['background'] = 9
+            else:
+                item['background'] = self.manager_background[background_value.encode("utf-8")]
             item['invest_year'] = response.xpath('//*[@id="experience"]/div[3]/div[2]//tr[1]/td[2]/text()').re_first(r'\d+')
             item['crawl_product_id'] = response.xpath('//*[@id="dbjj"]/@href').re_first(r'https://simu.howbuy.com/.+/(\w+)/$')
             item['manage_product_num'] = response.xpath('//*[@id="experience"]/div[3]/div[2]//tr[3]/td[4]/text()').re_first(r'\d+')
@@ -511,7 +607,7 @@ class SimuSpider(scrapy.Spider):
             d = time.strptime(t_str, '%Y%m%d')
             formatTime = time.strftime("%Y-%m-%d", d)
             nav_date = []
-            if(formatTime > str(hs_new_date[0])):
+            if(hs_new_date is None or formatTime > str(hs_new_date[0])):
                 now_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
                 nav_date.append(0)
                 nav_date.append(date_time_arr[index])
@@ -533,3 +629,24 @@ class SimuSpider(scrapy.Spider):
             return 1
         else:
             return
+    def _is_time(self,str_time):
+        try:
+            time.strptime(str_time, "%Y-%m-%d")
+            return True
+        except:
+            return False
+    def company_summary_ajax(self,response):
+        item = CompanyItem()
+        item = response.meta['item']
+        item['investment_idea'] = response.xpath('//p[@class="gaishu"][2]/text()').extract_first()
+        item['description'] = response.xpath('//p[@class="gaishu"][1]/text()').extract_first()
+        if(item['core_manager_name'] in response.meta['company_manager']):
+            item['core_manager_id'] = response.meta['company_manager'][item['core_manager_name']]
+            item['core_crawl_manager_id'] = response.meta['company_manager'][item['core_manager_name']]
+        else:
+            item['core_manager_id'] = None
+            item['core_crawl_manager_id'] = None
+        current_time = item['create_time']
+        item['update_time'] = current_time
+        item['create_time'] = current_time
+        return item

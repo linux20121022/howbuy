@@ -45,6 +45,8 @@ class ProductItem(scrapy.Item):
     crawl_create_time = Field()
     dividend_date = Field()
     purchase_status = Field()
+    crawl_managers_list = Field()
+    org_form = Field()
     pass
 
 class CompanyItem(scrapy.Item):
@@ -57,7 +59,9 @@ class CompanyItem(scrapy.Item):
     full_name = Field()
     nick_initial = Field()
     core_manager_id = Field()
+    core_crawl_manager_id = Field()
     core_manager_name = Field()
+    core_manager_id = Field()
     rep_product = Field()
     website_addr = Field()
     icp = Field()
